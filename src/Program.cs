@@ -20,7 +20,7 @@ namespace MysqlDumpBinlog
                 return;
             var req = new ServerReq(buffer.Take(i).ToArray());
             req.StartParse();
-            var resp = new Response("user", "pwd", req.AuthData.Take(20).ToArray(), "db1");
+            var resp = new Response("root", "mikawudi", req.AuthData.Take(20).ToArray(), "db1");
             var sendBuf = resp.toArray();
             mysqlConn.Send(sendBuf);
             i = mysqlConn.Receive(buffer);
@@ -38,7 +38,7 @@ namespace MysqlDumpBinlog
             var resp2 = buffer.Take(i).ToArray();
             Console.WriteLine(resp2[0]);
             //进入binlog模式
-            EntryBinLogModel(mysqlConn, "mysqlbin.000001", 4, new byte[] {0x00, 0x00}, 1090);
+            EntryBinLogModel(mysqlConn, "mysqlbin.000013", 4, new byte[] {0x00, 0x00}, 1090);
 
 
             return;
@@ -139,39 +139,95 @@ namespace MysqlDumpBinlog
 
             socket.Send(binlog_dumpPack.ToArray());
             List<Tuple<byte, byte[]>> binlogEvent = new List<Tuple<byte, byte[]>>();
+            List<byte> dataList = new List<byte>();
+            Queue<byte[]> packetQueue = new Queue<byte[]>();
+            byte preseq = 0x00;
+            //int status = 0;// 0: 未读取OK, 1:读取OK未读取FORMAT_DESCRIPTION_EVENT, 2:正常工作状态
+            Func<byte[], Tuple<bool, string>> action = ParseOK;
             while (true)
             {
-                try
-                {
-                    var realRead = socket.Receive(recvBuffer, 0, recvBuffer.Length, SocketFlags.None);
-                    var seq = recvBuffer[3];
-                    recvBuffer[3] = 0;
-                    var t = BitConverter.ToInt32(recvBuffer, 0);
-                    //ok包,跳过
-                    var fisrstpack = recvBuffer.Skip(4).Take(t).ToArray();
-
-                    var seq2 = recvBuffer[4 + t + 3];
-                    recvBuffer[4 + t + 3] = 0x00;
-                    //第二个包长度,第二个包是eventlog数据包了
-                    var length2 = BitConverter.ToInt32(recvBuffer, t + 4);
-                    //第二个包
-                    var sss = recvBuffer.Skip(8 + t).Take(length2).ToArray();
-                    ParseEventData(sss, seq2);
-                    if (realRead == 0)
-                        break;
-                    Console.WriteLine(realRead);
-                }
-                catch (Exception e)
-                {
+                var realRead = socket.Receive(recvBuffer, 0, recvBuffer.Length, SocketFlags.None);
+                if (realRead == 0)
                     break;
+                dataList.AddRange(recvBuffer.Take(realRead).ToArray());
+                while (dataList.Count > 4)
+                {
+                    if(dataList[3] != (preseq+1))
+                        throw new Exception("seq error");
+                    preseq++;
+                    dataList[3] = 0x00;
+                    var length = BitConverter.ToInt32(dataList.Take(4).ToArray(), 0);
+                    if (dataList.Count < length + 4)
+                    {
+                        break;
+                    }
+                    packetQueue.Enqueue(dataList.Skip(4).Take(length).ToArray());
+                    dataList.RemoveRange(0, 4 + length);
+                }
+                while (packetQueue.Count > 0)
+                {
+                    var data = packetQueue.Dequeue();
+                    var result = action(data);
+                    if(!result.Item1)
+                        throw new Exception(result.Item2);
+                    if (action == ParseOK)
+                    {
+                        action = ParseFormat_Description;
+                        continue;
+                    }
+                    if (action == ParseFormat_Description)
+                    {
+                        action = ParseEventData;
+                    }
                 }
             }
             socket.Close();
-
-
         }
 
-        static void ParseEventData(byte[] data, int seq)
+        static Tuple<bool, string> ParseOK(byte[] data)
+        {
+            if(data[0] == 0x00)
+                return new Tuple<bool, string>(true, null);
+            return new Tuple<bool, string>(false, null);
+        }
+
+        private static byte[] post_header_length;
+        private static int binlogVersion = 0;
+        /// <summary>
+        /// 解析format post-header-length
+        /// </summary>
+        /// <param name="data"></param>
+        /// <returns></returns>
+        static Tuple<bool, string> ParseFormat_Description(byte[] data)
+        {
+            var marker = data[0];
+            //跳过marker,获取eventheader
+            var head = data.Skip(1).Take(19).ToArray();
+            var timestamp = BitConverter.ToUInt32(head, 0);
+            var times = new DateTime(1970, 1, 1).AddSeconds(timestamp).ToString("yyyy-MM-dd HH:mm:ss");
+            var eventType = head[4];
+            var serverid = BitConverter.ToInt32(head, 5);
+            var eventLength = BitConverter.ToInt32(head, 9);
+            var nexPosition = BitConverter.ToInt32(head, 13);
+            var flag = head.Skip(17).Take(2).ToArray();
+            var databody = data.Skip(20).ToArray();
+            if (databody.Length != eventLength - 19)
+                throw new Exception();
+            if(eventType != 0x0f)
+                throw new Exception();
+            var foemate = FORMAT_DESCRIPTION_EVENT.Create(databody);
+            post_header_length = foemate.eventTypeHeaderLength; //私有headerlength的map
+            if(foemate.version != 4)
+                throw new Exception();
+            binlogVersion = foemate.version;
+            return new Tuple<bool, string>(true, null);
+        }
+
+        /// <summary>
+        /// 解析普通Event
+        /// </summary>
+        /// <param name="data"></param>
+        static Tuple<bool, string> ParseEventData(byte[] data)
         {
             var marker = data[0];
             //跳过marker,获取eventheader
@@ -190,12 +246,82 @@ namespace MysqlDumpBinlog
             }
             switch (eventType)
             {
+                case 0x00:
+                    return new Tuple<bool, string>(false, "unknow message");
+                case 0x02:
+                    ParseQuery(databody);
+                    return new Tuple<bool, string>(true, "");
+                case 0x13:
+                    ParseTableMapEvent(databody);
+                    return new Tuple<bool, string>(true, "");
                 case 0x0f:
-                    Console.WriteLine(FORMAT_DESCRIPTION_EVENT.Create(databody));
-                    break;
+                    throw new Exception();
+                    //Console.WriteLine(FORMAT_DESCRIPTION_EVENT.Create(databody));
                 default:
-                    return;
+                    return new Tuple<bool, string>(true, "uncare");
             }
+            return new Tuple<bool, string>(true, null);
+        }
+        static Dictionary<int, int> col_meta_def = new Dictionary<int, int>()
+        {
+
+        };
+        static void ParseTableMapEvent(byte[] data)
+        {
+            byte id = 0x13;
+            var tablemaperpostlen = post_header_length[id];
+            byte[] tableid;
+            var tablelen = 0;
+            if (tablemaperpostlen == 6)
+            {
+                tablelen = 4;
+            }
+            else
+            {
+                tablelen = 6;
+            }
+            tableid = data.Take(tablelen).ToArray();
+            var flag = data.Skip(tablelen).Take(2).ToArray();
+            var index = tablelen + 2;
+            var schemanamelen = data[index];
+            index++;
+            var schemaname = Encoding.UTF8.GetString(data, index, schemanamelen);
+            index += (schemanamelen + 1);
+            var tablenamelen = data[index];
+            index++;
+            var tablename = Encoding.UTF8.GetString(data, index, tablenamelen);
+            index += (tablenamelen + 1);
+            var temp = data.Skip(index).ToArray();
+            byte lenlen = 0;
+            var colcount = getStrLeng(temp, ref lenlen);
+            index += lenlen;
+            var colTypeDef = data.Skip(index).Take((int)colcount).ToArray();
+            index += (int)colcount;
+            List<>
+
+        }
+        public class MyTuple<T1, T2>
+        {
+            public 
+        }
+        static void ParseQuery(byte[] bodydata)
+        {
+            byte id = 0x02;
+            if(post_header_length[id] != 13)
+                throw new Exception();
+            var post_header = bodydata.Take(13).ToArray();
+            var slave_proxy_id = BitConverter.ToUInt32(post_header, 0);
+            var execute_time = BitConverter.ToUInt32(post_header, 4);
+            var scheme_length = post_header[8];
+            var error_code = BitConverter.ToInt16(post_header, 9);
+            var status_vars_length = BitConverter.ToInt16(post_header, 11);
+
+            var status_vars = Encoding.UTF8.GetString(bodydata.Skip(13).Take(status_vars_length).ToArray());
+            var schema = Encoding.UTF8.GetString(bodydata.Skip(13 + status_vars_length).Take(scheme_length).ToArray());
+            var spilt = bodydata[13 + status_vars_length + scheme_length];
+            var len = bodydata.Length - (13 + status_vars_length + scheme_length + 1) - 4;
+            var query = Encoding.UTF8.GetString(bodydata.Skip(13 + status_vars_length + scheme_length + 1).Take(len).ToArray());
+            var crc = bodydata.Skip(bodydata.Length - 4).ToArray();
         }
 
         static List<List<string>> ReadResultData(ref byte[] buffer, int colCount)
@@ -326,7 +452,7 @@ namespace MysqlDumpBinlog
         public int version;
         public string serverVersion;
         public DateTime timestamp;
-        public int nextEventHeadLength;
+        public int eventHeadLength;
         public byte[] eventTypeHeaderLength;
         public static FORMAT_DESCRIPTION_EVENT Create(byte[] data)
         {
@@ -334,8 +460,9 @@ namespace MysqlDumpBinlog
             result.version = BitConverter.ToUInt16(data, 0);
             result.serverVersion = Encoding.ASCII.GetString(data, 2, 50);
             result.timestamp = new DateTime(1970, 1, 1).AddSeconds(BitConverter.ToInt32(data, 52));
-            result.nextEventHeadLength = data[56];
-            result.eventTypeHeaderLength = data.Skip(57).ToArray();
+            result.eventHeadLength = data[56];
+            //bitmap里面把eventHeadLength当作unknow来使用
+            result.eventTypeHeaderLength = data.Skip(56).ToArray();
             return result;
         }
     }
