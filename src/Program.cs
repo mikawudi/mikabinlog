@@ -297,13 +297,57 @@ namespace MysqlDumpBinlog
             index += lenlen;
             var colTypeDef = data.Skip(index).Take((int)colcount).ToArray();
             index += (int)colcount;
-            List<>
+            var other = data.Skip(index).ToArray();
+            var lengthofmeadata = getStrLeng(other, ref lenlen);
+            index += (int)lenlen;
+            var meta_def = other.Skip(lenlen).Take((int) lengthofmeadata).ToArray();
+            int meta_index = 0;
+            index += (int) lengthofmeadata;
+            for (byte i = 0; i < colTypeDef.Length; i++)
+            {
+                var ts = FieldTypeMetaLength[colTypeDef[i]];
+                if (ts.Item3 > 0)
+                {
+                    meta_def.Skip(meta_index).Take(ts.Item3).ToArray();
+                    meta_index += ts.Item3;
+                }
+            }
 
         }
-        public class MyTuple<T1, T2>
+
+        private static Dictionary<byte, Tuple<byte, string, int>> FieldTypeMetaLength = new Dictionary<byte, Tuple<byte, string, int>>()
         {
-            public 
-        }
+            { 0x00, new Tuple<byte, string, int>(0x00, "Protocol::MYSQL_TYPE_DECIMAL", 2) },
+            { 0x01, new Tuple<byte, string, int>(0x01, "Protocol::MYSQL_TYPE_TINY", 0) },
+            { 0x02, new Tuple<byte, string, int>(0x02, "Protocol::MYSQL_TYPE_SHORT", 0) },
+            { 0x03, new Tuple<byte, string, int>(0x03, "Protocol::MYSQL_TYPE_LONG", 0) },
+            { 0x04, new Tuple<byte, string, int>(0x04, "Protocol::MYSQL_TYPE_FLOAT", 1) },
+            { 0x05, new Tuple<byte, string, int>(0x05, "Protocol::MYSQL_TYPE_DOUBLE", 1) },
+            { 0x06, new Tuple<byte, string, int>(0x06, "Protocol::MYSQL_TYPE_NULL", 0) },
+            { 0x07, new Tuple<byte, string, int>(0x07, "Protocol::MYSQL_TYPE_TIMESTAMP", 0) },
+            { 0x08, new Tuple<byte, string, int>(0x08, "Protocol::MYSQL_TYPE_LONGLONG", 0) },
+            { 0x09, new Tuple<byte, string, int>(0x09, "Protocol::MYSQL_TYPE_INT24", 0) },
+            { 0x0a, new Tuple<byte, string, int>(0x0a, "Protocol::MYSQL_TYPE_DATE", 0) },
+            { 0x0b, new Tuple<byte, string, int>(0x0b, "Protocol::MYSQL_TYPE_TIME", 0) },
+            { 0x0c, new Tuple<byte, string, int>(0x0c, "Protocol::MYSQL_TYPE_DATETIME", 0) },
+            { 0x0d, new Tuple<byte, string, int>(0x0d, "Protocol::MYSQL_TYPE_YEAR", 0) },
+            { 0x0e, new Tuple<byte, string, int>(0x0e, "Protocol::MYSQL_TYPE_NEWDATE", 0) },
+            { 0x0f, new Tuple<byte, string, int>(0x0f, "Protocol::MYSQL_TYPE_VARCHAR", 2) },
+            { 0x10, new Tuple<byte, string, int>(0x10, "Protocol::MYSQL_TYPE_BIT", 0) },
+            { 0x11, new Tuple<byte, string, int>(0x11, "Protocol::MYSQL_TYPE_TIMESTAMP2", 1) },
+            { 0x12, new Tuple<byte, string, int>(0x12, "Protocol::MYSQL_TYPE_DATETIME2", 1) },
+            { 0x13, new Tuple<byte, string, int>(0x13, "Protocol::MYSQL_TYPE_TIME2", 1) },
+            { 0xf6, new Tuple<byte, string, int>(0xf6, "Protocol::MYSQL_TYPE_NEWDECIMAL", 2) },
+            { 0xf7, new Tuple<byte, string, int>(0xf7, "Protocol::MYSQL_TYPE_ENUM", 2) },
+            { 0xf8, new Tuple<byte, string, int>(0xf8, "Protocol::MYSQL_TYPE_SET", 2) },//不确定
+            { 0xf9, new Tuple<byte, string, int>(0xf9, "Protocol::MYSQL_TYPE_TINY_BLOB", 0) },
+            { 0xfa, new Tuple<byte, string, int>(0xfa, "Protocol::MYSQL_TYPE_MEDIUM_BLOB", 0) },
+            { 0xfb, new Tuple<byte, string, int>(0xfb, "Protocol::MYSQL_TYPE_LONG_BLOB", 0) },
+            { 0xfc, new Tuple<byte, string, int>(0xfc, "Protocol::MYSQL_TYPE_BLOB", 1) },
+            { 0xfd, new Tuple<byte, string, int>(0xfd, "Protocol::MYSQL_TYPE_VAR_STRING", 2) },
+            { 0xfe, new Tuple<byte, string, int>(0xfe, "Protocol::MYSQL_TYPE_STRING", 2) },
+            { 0xff, new Tuple<byte, string, int>(0xff, "Protocol::MYSQL_TYPE_GEOMETRY", 2) },
+        };
         static void ParseQuery(byte[] bodydata)
         {
             byte id = 0x02;
