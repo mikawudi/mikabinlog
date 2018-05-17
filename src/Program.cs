@@ -254,6 +254,9 @@ namespace MysqlDumpBinlog
                 case 0x13:
                     ParseTableMapEvent(databody);
                     return new Tuple<bool, string>(true, "");
+                case 0x1f:
+                    ParseUpdate_Row_event2(databody);
+                    return new Tuple<bool, string>(true, "");
                 case 0x0f:
                     throw new Exception();
                     //Console.WriteLine(FORMAT_DESCRIPTION_EVENT.Create(databody));
@@ -262,10 +265,16 @@ namespace MysqlDumpBinlog
             }
             return new Tuple<bool, string>(true, null);
         }
-        static Dictionary<int, int> col_meta_def = new Dictionary<int, int>()
+
+        static void ParseUpdate_Row_event2(byte[] data)
         {
 
-        };
+        }
+
+        /// <summary>
+        /// 缓存表结构
+        /// </summary>
+        static Dictionary<string, Tuple<List<Tuple<byte, string, byte[]>>, byte[], int, string>> tablecoldef = new Dictionary<string, Tuple<List<Tuple<byte, string, byte[]>>, byte[], int, string>>();
         static void ParseTableMapEvent(byte[] data)
         {
             byte id = 0x13;
@@ -303,16 +312,25 @@ namespace MysqlDumpBinlog
             var meta_def = other.Skip(lenlen).Take((int) lengthofmeadata).ToArray();
             int meta_index = 0;
             index += (int) lengthofmeadata;
+            List<Tuple<byte, string, byte[]>> coldef = new List<Tuple<byte, string, byte[]>>();
             for (byte i = 0; i < colTypeDef.Length; i++)
             {
                 var ts = FieldTypeMetaLength[colTypeDef[i]];
+                byte[] metadata = null;
                 if (ts.Item3 > 0)
                 {
-                    meta_def.Skip(meta_index).Take(ts.Item3).ToArray();
+                    metadata = meta_def.Skip(meta_index).Take(ts.Item3).ToArray();
                     meta_index += ts.Item3;
                 }
+                coldef.Add(new Tuple<byte, string, byte[]>(ts.Item1, ts.Item2, metadata));
             }
-
+            var nullablemasklength = (colTypeDef.Length + 7) / 8;
+            var mask = data.Skip(index).Take(nullablemasklength).ToArray();
+            var tabkey = schemaname + ":" + tablename;
+            if (!tablecoldef.ContainsKey(tabkey))
+            {
+                tablecoldef.Add(tabkey, new Tuple<List<Tuple<byte, string, byte[]>>, byte[], int, string>(coldef, mask, BitConverter.ToInt32(tableid, 0), tabkey));
+            }
         }
 
         private static Dictionary<byte, Tuple<byte, string, int>> FieldTypeMetaLength = new Dictionary<byte, Tuple<byte, string, int>>()
