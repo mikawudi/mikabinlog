@@ -268,7 +268,50 @@ namespace MysqlDumpBinlog
 
         static void ParseUpdate_Row_event2(byte[] data)
         {
+            byte id = 0x1f;
+            var tablemaperpostlen = post_header_length[id];
+            byte[] tableid;
+            var tablelen = 0;
+            if (tablemaperpostlen == 6)
+            {
+                tablelen = 4;
+            }
+            else
+            {
+                tablelen = 6;
+            }
+            tableid = data.Take(tablelen).ToArray();
+            var flag = data.Skip(tablelen).Take(2).ToArray();
+            var index = tablelen + 2;
+            var extra_data_length = BitConverter.ToInt16(data, index);
+            index += 2;
+            var ext_data_length = extra_data_length - 2;
+            byte[] ext_data = null;
+            if (ext_data_length > 0)
+            {
+                ext_data = data.Skip(index).Take(ext_data_length).ToArray();
+            }
+            index += ext_data_length;
+            byte s = 0x00;
+            var collength = getStrLeng(data.Skip(index).ToArray(), ref s);
+            index += s;
+            var col_bitmap_len = (collength + 7) / 8;
+            //哪些列的数据
+            var col_bitmap1 = data.Skip(index).Take((int)col_bitmap_len).ToArray();
+            index += (int)col_bitmap_len;
+            var col_bitmap2 = data.Skip(index).Take((int)col_bitmap_len).ToArray();
+            index += (int)col_bitmap_len;
 
+            //计算出col_bitmap1前collength位中位标识为1的总数,这里知道是ff,所以就是6
+            var nul_bitmap_length = (collength + 7) / 8;
+            var nulmap = data.Skip(index).Take((int)nul_bitmap_length).ToArray();
+            index += (int) nul_bitmap_length;
+            //按tableMapper取值
+            var ddd = data.Skip(index).ToArray();
+            var dt = ddd.Skip(8 + 5).Take(5).ToArray();
+            dt[0] = (byte) (dt[0] - 128);
+            var mons = BitConverter.ToUInt16(dt, 0);
+            var sss = mons / 13;
         }
 
         /// <summary>
